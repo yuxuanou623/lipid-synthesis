@@ -2,39 +2,49 @@ from flask import Flask, request, jsonify
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from custom2removeunused import CUSTOM_REACTIONS
-
+import random
 app = Flask(__name__)
 
 
 
-def reaction(head, tail_smiles1, reaction_fg1):
-    
-    reaction_index = int(reaction_fg1) 
-
-    reaction = CUSTOM_REACTIONS[reaction_index]
+def reaction(head, tail_smiles1,reaction_fg1=None):
+    all_indices = list(range(14))  # 0 to 13 inclusive
+    tried_indices = set()
     smiles_list = []
-    template_index = 0
+    template_index = -1
 
-    # First direction: [head, tail]
-    mols1 = [Chem.MolFromSmiles(head), Chem.MolFromSmiles(tail_smiles1)]
-    products = reaction.run_reactants(mols1)
-    for product_tuple in products:
-        mol = product_tuple[0]
-        smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
-        smiles_list.append(smiles)
+    while len(tried_indices) < len(all_indices):
+        reaction_index = random.choice([i for i in all_indices if i not in tried_indices])
+        tried_indices.add(reaction_index)
 
-    # Second direction: [tail, head]
-    if len(smiles_list) ==0:
-        template_index = 1
+        reaction = CUSTOM_REACTIONS[reaction_index]
+        template_index = 0
+        smiles_list = []
 
-        mols2 = [Chem.MolFromSmiles(tail_smiles1), Chem.MolFromSmiles(head)]
-        products = reaction.run_reactants(mols2)
+        # First direction: [head, tail]
+        mols1 = [Chem.MolFromSmiles(head), Chem.MolFromSmiles(tail_smiles1)]
+        products = reaction.run_reactants(mols1)
         for product_tuple in products:
             mol = product_tuple[0]
             smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
             smiles_list.append(smiles)
 
-    return list(set(smiles_list))[0],template_index  # Convert to list for JSON serialization
+        # Second direction: [tail, head] if no product
+        if len(smiles_list) == 0:
+            template_index = 1
+            mols2 = [Chem.MolFromSmiles(tail_smiles1), Chem.MolFromSmiles(head)]
+            products = reaction.run_reactants(mols2)
+            for product_tuple in products:
+                mol = product_tuple[0]
+                smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+                smiles_list.append(smiles)
+
+        # If exactly one product found, return it
+        if len(smiles_list) !=0:
+            return list(set(smiles_list)), template_index
+
+    # If no reaction yields exactly one product, return all unique products from the last attempt
+    return list(set(smiles_list)), template_index
 
 @app.route('/reaction', methods=['POST'])
 def run_reaction():

@@ -43,8 +43,9 @@ def main(params: Params):
     all_syn_trees = []
     all_log_probs = []
     for _ in tqdm(range(params.num_batches)):
-        syn_trees = model.sample(params.batch_size)
-        all_syn_trees.extend(syn_trees)
+        samples = model.sample(params.batch_size)
+        print(samples)
+        all_syn_trees.extend(samples[0])
         # all_log_probs.append(log_probs.detach().cpu().numpy().T)
     # all_log_probs = np.concatenate(all_log_probs)
 
