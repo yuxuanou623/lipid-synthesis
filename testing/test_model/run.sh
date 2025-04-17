@@ -1,0 +1,4 @@
+python /home/yo279/rds/hpc-work/project/Github_lipid_dataset_creation/Lipid_reaction_dataset_creation/synthesis-dags/testing/test_model/lipid_construction_1_COOH_2_OH_1_N_1st_tail.py
+python /home/yo279/rds/hpc-work/project/Github_lipid_dataset_creation/Lipid_reaction_dataset_creation/synthesis-dags/testing/test_model/lipid_construction_2_COOH_0_OH_1_N_1st_tail.py
+python /home/yo279/rds/hpc-work/project/Github_lipid_dataset_creation/Lipid_reaction_dataset_creation/synthesis-dags/testing/test_model/lipid_construction_2_COOH_1_OH_1_N_1st_tail.py
+python /home/yo279/rds/hpc-work/project/Github_lipid_dataset_creation/Lipid_reaction_dataset_creation/synthesis-dags/testing/test_model/lipid_construction_3_COOH_0_OH_1_N_1st_tail.py

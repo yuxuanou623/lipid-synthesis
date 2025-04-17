@@ -1,0 +1,13 @@
+{
+  "data_dir": "/scratch/yo279/Lipid_reaction_dataset_creation/synthesis-dags/scripts/dogae/prior_sampling/samples",
+  "table_format": "github",
+  "tables_to_create": [
+
+    {"metrics":  ["num_generated","validity", "uniqueness",
+                   "novelty", "FCD"],
+      "rows": {
+        "Dog-AE": ["naive_mcts_smiles.txt", 4513]
+      }
+    }
+  ]
+}
