@@ -29,10 +29,10 @@ class Params:
     def __init__(self):
         self.device = torch_device() #self.device = 'cuda'
 
-        self.train_tree_path = "/mnt/data/training_data_template_filter.pkl"
-        self.val_tree_path = "/mnt/data/validation_data_template_filter.pkl"
-        self.reactant_vocab_path = "/mnt/data/smiles_to_index.json"
-        self.dataversion = 'data3_80k'  # Save checkpoint every 5 epochs by default
+        self.train_tree_path = "/mnt/data/data/syndags/my_data.pkl"
+        self.val_tree_path = "/mnt/data/data/syndags/my_data.pkl"
+        self.reactant_vocab_path = "/mnt/data/data/syndags/test.json"
+        self.dataversion = 'data3_small'  # Save checkpoint every 5 epochs by default
 
         self.num_dataloader_workers = 4
         self.num_epochs = 20
