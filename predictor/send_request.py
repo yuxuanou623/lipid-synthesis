@@ -7,13 +7,11 @@ url = 'http://localhost:8080/reaction'
 data = [
     {
         "head": "CC#CCCCCCCCCCN",
-        "tail_smiles1": "COCCN(CC(=O)O)C[C@H]1C[C@@H](CO)CO1",
-        "reaction_fg1": "1"
+        "tail_smiles1": "COCCN(CC(=O)O)C[C@H]1C[C@@H](CO)CO1"
     },
     {
         "head": "CC#CCCCCCCCCCN",
-        "tail_smiles1": "CN(C)CCN1CCN(C(=O)[C@H](N)CO)CC1",
-        "reaction_fg1": "1"
+        "tail_smiles1": "CN(C)CCN1CCN(C(=O)[C@H](N)CO)CC1"
     },
     # Add more dictionaries as needed
 ]

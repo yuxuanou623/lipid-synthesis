@@ -12,9 +12,7 @@ from torch.nn.utils import rnn
 from torch.distributions import gumbel
 import numpy as np
 import networkx as nx
-import os
-import sys
-sys.path.append(os.path.abspath('/mnt/data/synthesis-dags/submodules/autoencoders'))
+
 
 from autoencoders.dist_parameterisers import base_parameterised_distribution
 from autoencoders import similarity_funcs
@@ -44,14 +42,12 @@ class DecoderPreDefinedNetworks(nn.Module):
                  f_z_to_h0: nn.Module,  # function from the input to the initial settings of the hidden layers.
 
                  f_ht_to_e_add: nn.Module,
-                 f_ht_to_e_template: nn.Module,
                  f_ht_to_e_reactant: nn.Module,
                  f_ht_to_e_edge: nn.Module):
         super().__init__()
         self.mol_embdr = mol_embdr
         self.f_z_to_h0 = f_z_to_h0
         self.f_ht_to_e_add = f_ht_to_e_add
-        self.f_ht_to_e_template = f_ht_to_e_template
         self.f_ht_to_e_reactant = f_ht_to_e_reactant
         self.f_ht_to_e_edge = f_ht_to_e_edge
 
@@ -70,8 +66,6 @@ class ExtraSymbols(nn.Module):
         # ^ first row reactant, second product
 
         self.edge_action_stop = self.create_and_return(2, action_embedding_size)
-
-        self.template_step_action_embeddings = self.create_and_return(14, action_embedding_size)
         # first row stop intermediate, second row stop final
 
     @staticmethod
@@ -160,60 +154,31 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
         Here we calculate the negative log likelihood of the sequence. For each  we feed in the previous observation
         ie if you use this function during training then doing teacher forcing.
         """
-        
         molecular_graph_embeddings_incl_stops = torch.cat([obs.molecular_graph_embeddings, self.learnt_symbols.edge_action_stop])
-        
+
         # --> Form the inputs for the RNN by using previous action.
         # --> Working out the correct action embeddings
-        
         prev_action_choice_ = torch_utils.remove_last_from_packed_seq(obs.sequence_choices)
-        
         prev_action_kind_ = torch_utils.remove_last_from_packed_seq(obs.sequence_action_kinds)
-        
+
         out_data_minus_first = torch.zeros(prev_action_choice_.data.shape[0], self.learnt_symbols.action_embedding_size,
                                dtype=settings.TORCH_FLT, device=str(molecular_graph_embeddings_incl_stops.device))
-        
         # ----> Add steps
         add_step_locations = prev_action_kind_.data == synthesis_trees.ADD_STEP_VAL
-        
-        
         add_step_choice = prev_action_choice_.data[add_step_locations]
-        
         add_step_embeddings = self.learnt_symbols.add_step_action_embeddings[add_step_choice, :]
-        
         out_data_minus_first[add_step_locations, :] = add_step_embeddings
-
-        # ----> Template steps
-        template_step_locations = prev_action_kind_.data == synthesis_trees.TEMPLATE_STEP_VAL
-        template_step_choice = prev_action_choice_.data[template_step_locations]
-        template_step_embeddings = self.learnt_symbols.template_step_action_embeddings[template_step_choice, :]
-        
-        out_data_minus_first[template_step_locations, :] = template_step_embeddings
-
         # ----> reactant add steps and edge add steps both index graphs:
-        grph_locations = (prev_action_kind_.data != synthesis_trees.ADD_STEP_VAL) & \
-                 (prev_action_kind_.data != synthesis_trees.TEMPLATE_STEP_VAL)
-        
-        
-
-        
-        
-      
+        grph_locations = prev_action_kind_.data != synthesis_trees.ADD_STEP_VAL
         grph_step_choice = prev_action_choice_.data[grph_locations]
-
         grph_step_embeddings = molecular_graph_embeddings_incl_stops[grph_step_choice, :]
-       
         out_data_minus_first[grph_locations, :] = grph_step_embeddings
-       
-        
-        
 
         input_data = rnn.PackedSequence(out_data_minus_first, prev_action_choice_.batch_sizes)
-        
+
         # --> Feed through the RNN
         initial_hidden = self._initial_hidden_after_update
         outputs, _ = self.gru(input_data, initial_hidden)
-        
 
         # --> Take out and feed through the in individual networks.
         out_packed_losses_data = torch.zeros(outputs.data.shape[0],
@@ -221,12 +186,10 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
 
         # --> Get out the actions we need to predict and the relevant possible edge masks. Note we are not interested
         # in the first item as it is ALWAYS add a reactant node.
-        
         section_action_kinds_to_predict = torch_utils.remove_first_from_packed_seq(obs.sequence_action_kinds)
         section_actions_to_predict = torch_utils.remove_first_from_packed_seq(obs.sequence_choices)
         edge_masks = torch_utils.remove_first_from_packed_seq(obs.sequence_masks_for_edge_steps)
         reactant_masks = torch_utils.remove_first_from_packed_seq(obs.sequence_masks_for_reactant_steps)
-        
 
         # ----> Add steps
         out_add_step_locs = section_action_kinds_to_predict.data == synthesis_trees.ADD_STEP_VAL
@@ -234,15 +197,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
         add_step_logits = dot_product_similarity(add_steps_embeddings, self.learnt_symbols.add_step_action_embeddings)
         add_step_losses = F.cross_entropy(add_step_logits, section_actions_to_predict.data[out_add_step_locs], reduction='none')
         out_packed_losses_data[out_add_step_locs] = add_step_losses
-
-
-        # ----> Template steps
-        out_template_step_locs = section_action_kinds_to_predict.data == synthesis_trees.TEMPLATE_STEP_VAL
-        template_steps_embeddings = self.other_nets.f_ht_to_e_template(outputs.data[out_template_step_locs, :])
-        template_step_logits = dot_product_similarity(template_steps_embeddings, self.learnt_symbols.template_step_action_embeddings)
-        template_step_losses = F.cross_entropy(template_step_logits, section_actions_to_predict.data[out_template_step_locs], reduction='none')
-        out_packed_losses_data[out_template_step_locs] = template_step_losses
-        
 
         # ----> Building block choose step
         out_reactant_choose_step_locs = section_action_kinds_to_predict.data == synthesis_trees.REACTANT_CHOOSE_STEP_VAL
@@ -253,7 +207,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
                                                               section_actions_to_predict.data[out_reactant_choose_step_locs],
                                                               reactant_masks.data[out_reactant_choose_step_locs])
         out_packed_losses_data[out_reactant_choose_step_locs] = reactant_step_losses
-        
 
         # ----> Edge add step values
         out_edge_add_step_locs = section_action_kinds_to_predict.data == synthesis_trees.EDGE_ADD_STEP_VAL
@@ -316,40 +269,25 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
         # --> Set up initial x and the indices we are interested in.
         x = self.learnt_symbols.add_step_action_embeddings[synthesis_trees.ADD_STEP_CHOOSE_REACTANT, :].unsqueeze(0).repeat(1, batch_size, 1)
         # ^ [1, b, h]
-        
         cont_indcs_into_original = torch.arange(batch_size, dtype=settings.TORCH_INT, device=hidden.device)
 
         # --> Go through and iterate through time steps, sampling a sequence.
         # Start at step one as we know we pick add reactant  node on the first step.
         for i in range(1, self.params.max_steps):
-            print("i", i)
-            
             # ----> All the current ones will increase by size 1
             lengths[cont_indcs_into_original] += 1
-            
 
             # ----> Run through one step and sample the values for each batch member:
             op, hidden = self.gru(x, hidden)  # op [1, b', h]
             op = op.squeeze(0)   # op [ b', h]
             x_next_time = torch.full_like(x, settings.PAD_VALUE).squeeze(0)  # [b, h]
             x_type = action_kinds[i, cont_indcs_into_original]
-            
             continue_mask = torch.ones_like(cont_indcs_into_original, dtype=torch.bool)
-            
-            # ----> Map through the required MLPs
-            # if self._sample_reactant_choose_step_points. actions_chosen = tensor([index_0_in_batch_chosen_reactant_index, ..., index_(batchsize-1)_in_batch_chosen_reactant_index], device = 'cuda:0'
-            # new_x_parts  shape ()
-            # x_type is a tensor of action_kinds tensor([0, 0], device='cuda:0') index_0_in_batch_choose_add_node, index_1_in_batch_choose_add_node
-            # if self._sample_edge_add_step_points actions_chosen tensor([20163, 20751], device='cuda:0') index_0_in_batch_choose_edge, index_1_in_batch_choose_edge
-            # if self._sample_edge_add_step_points the chosen action tensor([43741, 43741], device='cuda:0') (total 43740 building blocks)
-            # chosen action tensor([43741, 43742] 43741 is intermediate stop, 43742 is stop final
-            # stop tensor([-10000, -10000], device='cuda:0') settings.PAD_VALUE
 
+            # ----> Map through the required MLPs
             for computed_op in (
                     # add new node:
-                    self._sample_add_step_points(x_type, op, sampling_func, cont_indcs_into_original, inter_node_mngr),
-                    # template choice:
-                    self._sample_template_step_points(x_type, op, sampling_func, cont_indcs_into_original, inter_node_mngr),
+                    self._sample_add_step_points(x_type, op, sampling_func, cont_indcs_into_original),
                     # reactant choice:
                     self._sample_reactant_choose_step_points(x_type, op, sampling_func, cont_indcs_into_original
                         , mol_features_reactants, inter_node_mngr),
@@ -357,10 +295,7 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
                     self._sample_edge_add_step_points(x_type, op, sampling_func, cont_indcs_into_original,
                                                       inter_node_mngr)):
                 mask_locations, actions_chosen, log_probs_this_action, actions_kind_next_time, new_x_parts, continuing_mask = computed_op
-            
                 if actions_chosen is not None:
-                    print("actions_chosen",actions_chosen)
-                    print("mask_locations",mask_locations)
                     action_choices[i, cont_indcs_into_original[mask_locations]] = actions_chosen
                     action_kinds[i + 1, cont_indcs_into_original[mask_locations]] = actions_kind_next_time
                     x_next_time[mask_locations] = new_x_parts
@@ -368,7 +303,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
                     log_probs[i, cont_indcs_into_original[mask_locations]] = log_probs_this_action
 
             cont_indcs_into_original = cont_indcs_into_original[continue_mask]
-            
 
             # if all the sequences in the batch have finished then we can break early!
             if not cont_indcs_into_original.shape[0] > 0:
@@ -376,27 +310,31 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
 
             x = x_next_time[continue_mask]
             x = x.unsqueeze(0)  # need to add a time sequence dimension. so [1, b', h]
-            
             hidden = hidden[:, continue_mask, :]  # [1, b', h]
-            print("action_kinds",action_kinds[:15])
-            print("action_choices",action_choices[:15])
-            
 
         syn_trees = inter_node_mngr.close_off_unconnected_and_return_final_trees(self._run_forward_reaction_and_get_new_products,
                                                                                  rng=self.rng)
 
-        return syn_trees, log_probs,action_kinds, action_choices
+        return syn_trees, log_probs
 
-    def _run_forward_reaction_and_get_new_products(self, reactant_sets, template):
+    def _run_forward_reaction_and_get_new_products(self, reactant_sets):
         try:
-            products_sets = self.react_pred(reactant_sets,template)
+            print("_run_forward_reaction_and_get_new_products")
+            products_sets = self.react_pred(reactant_sets)
+            print("out")
+            # print("in  _run_forward_reaction_and_get_new_products(self, reactant_sets)")
+            # print("reactant_sets")
+            # print(reactant_sets)
+            # print("products_sets")
+            # print(products_sets)
         except Exception as ex:
-            print("reaction predictor failed.")
-            print("The exception is", ex)
-            print("The reactant_sets is",reactant_sets)
-            return []
-        print("reactant_sets",reactant_sets)
-        print("products_sets",products_sets)
+            # print("reaction predictor failed.")
+            # print(ex)
+            # print(reactant_sets)
+            raise ex
+        for e in products_sets:
+            # print("len(e)")
+            print(len(e))
         assert all([len(e) == 1 for e in products_sets])
         products = [next(iter(e)) for e in products_sets]
         return products
@@ -405,7 +343,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
                                   cont_indcs_into_original, indcs2logitmasks=None):
         net_to_use = {
             synthesis_trees.ADD_STEP_VAL: self.other_nets.f_ht_to_e_add,
-            synthesis_trees.TEMPLATE_STEP_VAL: self.other_nets.f_ht_to_e_template,
             synthesis_trees.REACTANT_CHOOSE_STEP_VAL: self.other_nets.f_ht_to_e_reactant,
             synthesis_trees.EDGE_ADD_STEP_VAL: self.other_nets.f_ht_to_e_edge
         }[step_kind_val]
@@ -417,7 +354,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
             logits = dot_product_similarity(embeddings, embeddings_for_options)
             if indcs2logitmasks is not None:
                 logit_masks = indcs2logitmasks(cont_indcs_into_original[mask])
-               
                 logits[~logit_masks] = -np.inf  # switch off the locations which do not have the mask on.
             sampled_actions, log_probs = sampling_func(logits)
         else:
@@ -426,7 +362,7 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
             log_probs = None
         return mask, sampled_actions, log_probs
 
-    def _sample_add_step_points(self, x_type, op, sampling_func, cont_indcs_into_original, inter_node_mngr):
+    def _sample_add_step_points(self, x_type, op, sampling_func, cont_indcs_into_original):
 
         mask, actions, log_probs = self._filter_and_sample_points(x_type, op, sampling_func, synthesis_trees.ADD_STEP_VAL,
                                                                self.learnt_symbols.add_step_action_embeddings,
@@ -439,78 +375,24 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
             new_action_kind = torch.zeros_like(actions, dtype=settings.TORCH_INT)
             new_action_kind[
                 actions == synthesis_trees.ADD_STEP_CHOOSE_REACTANT] = synthesis_trees.REACTANT_CHOOSE_STEP_VAL
-            mask_ = actions == synthesis_trees.ADD_STEP_CHOOSE_PRODUCT
-            indices = torch.where(mask_)[0]
-
-            for idx in indices:
-                if inter_node_mngr.intermediate[idx]:
-                    new_action_kind[idx] = synthesis_trees.TEMPLATE_STEP_VAL
-                else:
-                    new_action_kind[idx] = synthesis_trees.EDGE_ADD_STEP_VAL
-            
+            new_action_kind[
+                actions == synthesis_trees.ADD_STEP_CHOOSE_PRODUCT] = synthesis_trees.EDGE_ADD_STEP_VAL
 
             new_x_parts = self.learnt_symbols.add_step_action_embeddings[actions]
 
             continue_mask = torch.ones_like(actions, dtype=torch.bool)
         return mask, actions, log_probs, new_action_kind, new_x_parts, continue_mask
 
-    def _sample_template_step_points(self, x_type, op, sampling_func, cont_indcs_into_original, inter_node_mngr):
-
-        mask, actions, log_probs = self._filter_and_sample_points(x_type, op, sampling_func, synthesis_trees.TEMPLATE_STEP_VAL,
-                                                               self.learnt_symbols.template_step_action_embeddings,
-                                                       cont_indcs_into_original)
-        if actions is None:
-            new_action_kind, new_x_parts, continue_mask = None, None, None
-        else:
-            # on a add  step we can either add a reactant or an edge symbol for the next action
-            # (if we add a stop then wont continue anyway)
-            new_action_kind = synthesis_trees.EDGE_ADD_STEP_VAL
-            new_x_parts = self.learnt_symbols.template_step_action_embeddings[actions]
-
-            continue_mask = torch.ones_like(actions, dtype=torch.bool)
-            print("actions",actions)
-            print("mask",mask)
-            if  all(t == "" for t in inter_node_mngr.template1):
-                for i, m in enumerate(mask):
-                
-                    if m :
-                        inter_node_mngr.template1[i] = actions[i] 
-            else:
-                for i, m in enumerate(mask):
-                
-                    if m :
-                        inter_node_mngr.template2[i] = actions[i] 
-
-
-
-
-
-        return mask, actions, log_probs, new_action_kind, new_x_parts, continue_mask
-    
-    
     def _sample_reactant_choose_step_points(self, x_type, op, sampling_func, cont_indcs_into_original, reactant_feats,
                                             inter_node_mngr):
         def get_reactant_mask_func(indcs_to_get_mask_for):
             reactant_masks = inter_node_mngr.get_current_reactant_masks(indcs_to_get_mask_for)
-            # if torch.all(reactant_masks == 1):
-            #     # no reactant choosen yet, let it choose lipid head
-            #     reactant_masks[indcs_to_get_mask_for, 38431:] = 0
-            # else:
-            #     all_indices = set(range(43741))
-            #     long_tail_indices = set(inter_node_mngr.long_tail_indices)
-            #     short_tail_indices = list(all_indices - long_tail_indices)
-            #     reactant_masks[indcs_to_get_mask_for, 0:38431] = 0
-            #     reactant_masks[indcs_to_get_mask_for, short_tail_indices] = 0
-            # print("reactant_masks")
-            # print(reactant_masks.shape)
-
             return reactant_masks
         # Note technically one could have no viable options for reactants if masked them all out (as already selected)
         # technically then at this point the add reactant action should not be selected the step before (ie it should
         # be masked out). However, we shall assume that the reactant vocabularies we are dealing with are so large
         # that no learned model should ever select that large a number of them and so get into this situation anyway.
 
-        
         mask, actions, log_probs = self._filter_and_sample_points(x_type, op, sampling_func, synthesis_trees.REACTANT_CHOOSE_STEP_VAL,
                                                        reactant_feats, cont_indcs_into_original,
                                                        indcs2logitmasks=get_reactant_mask_func)
@@ -536,7 +418,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
         mol_features_incl_edge_stop = inter_node_mngr.molecular_features_including_edge_stops
         def get_edge_masks_func(indcs_to_get_mask_for):
             edge_masks = inter_node_mngr.get_current_edge_masks(indcs_to_get_mask_for)
-            indices = torch.nonzero(edge_masks == 1, as_tuple=True)[1]
             return edge_masks
         mask, actions, log_probs = self._filter_and_sample_points(x_type, op, sampling_func,
                                                        synthesis_trees.EDGE_ADD_STEP_VAL,
@@ -553,13 +434,6 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
             new_action_kind = torch.full_like(actions, fill_value=synthesis_trees.EDGE_ADD_STEP_VAL, dtype=settings.TORCH_INT)
 
             mask_where_stopping_intermediate = actions == inter_node_mngr.current_stop_intermediate_indx
-            mask_temp = x_type == synthesis_trees.EDGE_ADD_STEP_VAL
-            stop_intermediate_indices_in_batch = cont_indcs_into_original[mask_temp][mask_where_stopping_intermediate]
-            if stop_intermediate_indices_in_batch.numel() != 0:
-                
-                for stop_intermediate_indice in stop_intermediate_indices_in_batch:
-                    inter_node_mngr.intermediate[stop_intermediate_indice]=True
-
             new_action_kind[mask_where_stopping_intermediate] = synthesis_trees.ADD_STEP_VAL
 
             mask_where_stopping_final = actions == inter_node_mngr.current_stop_final_indx
@@ -570,30 +444,11 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
 
             indcs_into_original_of_stopping_intermediate = cont_indcs_into_original[mask][mask_where_stopping_intermediate]
             indcs_into_original_of_continuing = cont_indcs_into_original[mask][mask_for_continuing_adding_edges]
-            indcs_into_original_of_stopping_final = cont_indcs_into_original[mask][mask_where_stopping_final]
-          
-            
-
-            
 
             if indcs_into_original_of_continuing.shape[0]:
                 inter_node_mngr.register_nonstopping_edge_node(indcs_into_original_of_continuing,
                                                                actions[mask_for_continuing_adding_edges])
                 # ^ update mask so do not repeatedly add the same edges to the same intermediate node.
-
-            indices_with_len_2 = [
-    idx for idx, edge_list in inter_node_mngr.edges_added_into_undefined_intermediate_node.items()
-    if len(edge_list) == 2 and not inter_node_mngr.intermediate_template[idx]
-]
-            print("indices_with_len_2",indices_with_len_2)
-
-            #indice_next_template = list(set(indcs_into_original_of_continuing.tolist()) & set(indices_with_len_2))
-       
-            new_action_kind[indices_with_len_2] = synthesis_trees.TEMPLATE_STEP_VAL
-
-            for idx in indices_with_len_2:
-                inter_node_mngr.intermediate_template[idx] = True
-
 
             if indcs_into_original_of_stopping_intermediate.shape[0]:
                 # For intermediate products that are finished we need to get the new molecule formed by the reaction
@@ -664,22 +519,7 @@ class _IntermediateManager(nn.Module):
 
         self.output_trees = [nx.DiGraph() for _ in range(batch_size)]  # will store DAGs
         self.molecules_visited_in_order = collections.defaultdict(list)
-        # ^ stores the order in which we visit thself.intermediatee nodes when creating the trees.
-        self.discard = [False for _ in range(batch_size)]
-        self.head_in_edge = [False for _ in range(batch_size)]
-        self.intermediate_template= [False for _ in range(batch_size)]
-        
-
-        # Load the array from the .npy file
-        file_path = '/scratch/yo279/Datafromhpc/smiles_index_data2_small_tail_moreorqeual_10_indexs.npy'  # Replace with your file path
-        
-        # self.long_tail_indices = np.load(file_path)
-        self.intermediate = [False for _ in range(batch_size)]
-
-        self.next_template = [False for _ in range(batch_size)]
-
-        self.template1 =  ["" for _ in range(batch_size)]
-        self.template2 =  ["" for _ in range(batch_size)]
+        # ^ stores the order in which we visit the nodes when creating the trees.
 
     @property
     def molecular_features_including_edge_stops(self):
@@ -727,7 +567,7 @@ class _IntermediateManager(nn.Module):
         edges_used = edges_used.cpu().numpy()
         for idx, e_add in zip(batch_elements_involved, edges_used):
             self.edges_added_into_undefined_intermediate_node[idx].append(e_add)
-            
+
     def register_stopping_edge_intermediate_node(self, batch_elements_involved: torch.Tensor, react_predictor_func):
         """
         This registers that the stop adding edges and form intermediate product symbol has been chosen.
@@ -740,62 +580,30 @@ class _IntermediateManager(nn.Module):
 
         # Calculate the reactant sets coming into this node. (These are the edges registered)
         reactant_sets = []
-      
         for b_elem in batch_elements_involved_np:
             reactant_sets.append(multiset.FrozenMultiset([idx_to_mol[idx] for idx in
                                                           self.edges_added_into_undefined_intermediate_node[b_elem]]))
 
-
         # Calculate the intermediate product:
-      
-        _new_products = react_predictor_func(reactant_sets, self.template1)
-       
-        if len(_new_products) == 0:
-            for index in batch_elements_involved_np:
-                self.discard[index] = True
-                return 
-
-        new_products=[]
-        
+        new_products = react_predictor_func(reactant_sets)
+        # print("in dog_gen new_products = react_predictor_func(reactant_sets)")
+        # print("reactant_sets")
+        # print(reactant_sets)
+        # print("new_products")
+        # print(new_products )
 
         # Now add these products to the tree and connect up the edges which were until now into an undefined
         # intermediate product
-        for b_elem, new_prod in zip(batch_elements_involved_np, _new_products):
-            if new_prod in reactant_sets[batch_elements_involved_np.tolist().index(b_elem)]:
-                self.discard[b_elem] = True
-               
-            
-                
-            else :
-                new_products.append(new_prod)
-                new_node = (new_prod,)
-                self._add_new_reactant_or_intermediate_node(b_elem, new_prod)
-                for ed in self.edges_added_into_undefined_intermediate_node[b_elem]:
-                    incoming_node = (idx_to_mol[ed],)
-                    self.output_trees[b_elem].add_edge(incoming_node, new_node)
-                self.edges_added_into_undefined_intermediate_node[b_elem] = []
-                
-
+        for b_elem, new_prod in zip(batch_elements_involved_np, new_products):
+            new_node = (new_prod,)
+            self._add_new_reactant_or_intermediate_node(b_elem, new_prod)
+            for ed in self.edges_added_into_undefined_intermediate_node[b_elem]:
+                incoming_node = (idx_to_mol[ed],)
+                self.output_trees[b_elem].add_edge(incoming_node, new_node)
+            self.edges_added_into_undefined_intermediate_node[b_elem] = []
 
         self._add_new_mols_to_dict_and_features(new_products)
 
-    def get_add_step_mask_masks(self, batch_elements_involved: torch.Tensor):
-        num_elements = batch_elements_involved.shape[0]
-        num_possible_edge_actions = 2 # choose reactant or choose edge
-        base_mask = torch.ones(num_elements, num_possible_edge_actions, dtype=torch.bool, device=self._torch_device)
-        for i, batch_element in enumerate(batch_elements_involved.cpu().numpy()):
-            # if the syn tree has already choosen three, then mask choose reactant
-            molecules_existing_smi = [node[0] for node in self.output_trees[batch_element].nodes]
-            molecules_existing_indcs = [self.mol_to_idx_dict[smi] for smi in molecules_existing_smi]
-            # Convert to a tensor for efficient filtering (optional, depends on your needs)
-            molecules_existing_indcs_tensor = torch.tensor(molecules_existing_indcs)
-            # Count the indices that are less than or equal to 43740
-            count = (molecules_existing_indcs_tensor <= 43740).sum()
-            if count >=3:
-                base_mask[i, 0] = False
-        return base_mask
-
-    
     def get_current_edge_masks(self, batch_elements_involved: torch.Tensor):
         """
         this is based on current edges added into the working intermediate product node.
@@ -803,62 +611,19 @@ class _IntermediateManager(nn.Module):
         num_elements = batch_elements_involved.shape[0]
         num_possible_edge_actions = len(self.mol_to_idx_dict) + 2  #  +2 for two different stop actions.
         base_mask = torch.zeros(num_elements, num_possible_edge_actions, dtype=torch.bool, device=self._torch_device)
-        
-        
-        # base_mask[:, -1] = True  # can always stop final
+        base_mask[:, -1] = True  # can always stop final
 
         for i, batch_element in enumerate(batch_elements_involved.cpu().numpy()):
-            if self.intermediate[batch_element] ==True:
-                base_mask[i, -1]= True
-            else :
-                base_mask[i, -1]= False
             # First turn on all molecules in the graph
             molecules_existing_smi = [node[0] for node in self.output_trees[batch_element].nodes]
             molecules_existing_indcs = [self.mol_to_idx_dict[smi] for smi in molecules_existing_smi]
-            
-            
+            base_mask[i, molecules_existing_indcs] = True
 
-            # Convert to a PyTorch tensor
-            molecules_existing_indcs_tensor = torch.tensor(molecules_existing_indcs)
-
-            # Apply the condition to filter indices
-            head_indices = molecules_existing_indcs_tensor[(molecules_existing_indcs_tensor >= 0) & (molecules_existing_indcs_tensor <= 38430)]
-            
-
-            
-            if len(self.edges_added_into_undefined_intermediate_node[batch_element]) ==0 and self.head_in_edge[batch_element] == False:
-                base_mask[i, :] = False
-                base_mask[i, head_indices] = True
-                self.head_in_edge[batch_element]=True
-            elif self.head_in_edge[batch_element] == True:                
-                base_mask[i, molecules_existing_indcs] = True
-                # Then turn back off all molecules that have already been connected to this intermediate node.
-                # if no reactant in current intermediate node and the synthesis tree is empty, choose the head.
-            
-
-                if len(self.edges_added_into_undefined_intermediate_node[batch_element])>0 and len(self.edges_added_into_undefined_intermediate_node[batch_element])<2:
-                    for edges_already_added in self.edges_added_into_undefined_intermediate_node[batch_element]:
-                        base_mask[i, edges_already_added] = False
-                    if self.intermediate[batch_element] == False:
-                        base_mask[i, -2] = True  # as has at least one edge can also now stop intermediate
-                    else:
-                        base_mask[i, -2] = False
-                elif len(self.edges_added_into_undefined_intermediate_node[batch_element]) ==2:
-                    base_mask[i, :] = False
-                    if self.intermediate[batch_element] ==False:
-                        base_mask[i, -2] = True
-                    else:
-                        base_mask[i, -1] = True
-                if self.intermediate[batch_element] ==True:
-                    base_mask[i, :] = False
-                    base_mask[i, -1]= True
-        # print("self.edges_added_into_undefined_intermediate_node[batch_element]",self.edges_added_into_undefined_intermediate_node[batch_element])
-        # print("num_possible_edge_actions",num_possible_edge_actions)
-        # print("len(self.edges_added_into_undefined_intermediate_node[batch_element])")  
-        # print(len(self.edges_added_into_undefined_intermediate_node[batch_element]))
-        # print("(base_mask[i, :] == True).nonzero(as_tuple=True)[0].tolist()")
-        # print((base_mask[i, :] == True).nonzero(as_tuple=True)[0].tolist())
-        
+            # Then turn back off all molecules that have already been connected to this intermediate node.
+            if len(self.edges_added_into_undefined_intermediate_node[batch_element]):
+                for edges_already_added in self.edges_added_into_undefined_intermediate_node[batch_element]:
+                    base_mask[i, edges_already_added] = False
+                base_mask[i, -2] = True  # as has at least one edge can also now stop intermediate
         return base_mask
 
     def get_current_reactant_masks(self,  batch_elements_involved: torch.Tensor):
@@ -872,15 +637,6 @@ class _IntermediateManager(nn.Module):
             reactants_existing_indcs = [self.mol_to_idx_dict[smi] for smi in reactants_existing_smi]
             assert np.all(np.array(reactants_existing_indcs) < self.num_initial_reactants)
             base_mask[i, reactants_existing_indcs] = False
-        
-            if torch.all(base_mask[i,:] == 1):
-                    # no reactant choosen yet, let it choose lipid head
-                base_mask[i, 79497:] = 0
-            else:
-              
-                
-                base_mask[ i,0:79497] = 0
-        
         return base_mask
 
     def close_off_unconnected_and_return_final_trees(self, react_predictor_func, rng):
@@ -890,79 +646,20 @@ class _IntermediateManager(nn.Module):
         :param react_predictor_func:
         :return:
         """
-        discard_final_num = 0
         self._clean_construction_upto_final()
 
         # Work out what are the nodes with no children and connect these up to the stop node. Then work out what the
         # stop node will therefore be.
         multiset_disconnected = self._get_multisets_of_molecules_coming_into_final()
-        
-        prev_self_discard = self.discard
-        final_discard = [False for _ in range(len(multiset_disconnected))]
-        # print("before final prev_self_discard self.discard",prev_self_discard )
-        # print("prev_self_discard",prev_self_discard)
-        filtered_output_trees = [tree for tree, discard in zip(self.output_trees, prev_self_discard) if not discard]
-        
-        
-        
-        final_products = react_predictor_func(multiset_disconnected, self.template2)
-        
-        if len(final_products) == 0:
-            self.discard =  [True for _ in range(len(multiset_disconnected))]
-        
-        # print("origin final_products", len(final_products))
-        # print("self.output_trees", len(self.output_trees))
-        # print("multiset_disconnected", len(multiset_disconnected))
-        for idx, final_product in enumerate(final_products):
-            if final_product in multiset_disconnected[idx]:
-                discard_final_num = discard_final_num+1
-                
-                final_discard[final_products.index(final_product)]=True
+        final_products = react_predictor_func(multiset_disconnected)
 
         output_synthesis_trees = []
         mols_visited_in_order = [self.molecules_visited_in_order[i] for i in range(len(self.molecules_visited_in_order))]
-        # print("mols_visited_in_order", len(mols_visited_in_order))
-        filtered_mols_visited_in_order = [mol for mol, discard in zip(mols_visited_in_order, prev_self_discard) if not discard]
-        filtered_multiset_disconnected = [mol for mol, discard in zip(multiset_disconnected, final_discard) if not discard]
-        # print("filtered_mols_visited_in_order", len(filtered_mols_visited_in_order))
 
         # Add the stop node to the trees and construction sequencing
-        # Assuming self.discard is defined and correlates directly with the indices of final_products and multiset_disconnected
-        final_output_trees = [tree for tree, discard in zip(filtered_output_trees, final_discard) if not discard]
-        final_products = [product for product, discard in zip(final_products, final_discard) if not discard]
-        filtered_mols_visited_in_order = [mol for mol, discard in zip(filtered_mols_visited_in_order, final_discard) if not discard]
-        # print("final_products",len(final_products))
-        # print("final_output_trees", len(final_output_trees))
-        # print("filtered_mols_visited_in_order",len(filtered_mols_visited_in_order))
-        # print("filtered_multiset_disconnected",filtered_multiset_disconnected)
-
-        
-        
-        #filtered_multiset_disconnected = [multi for multi, discard in zip(multiset_disconnected, self.discard) if not discard]
-        
-
-        # Compute indices to remove: those that were not discarded before but are discarded now
-        # indices_to_remove = [i for i, (prev, curr) in enumerate(zip(prev_self_discard, self.discard))
-        #                     if not prev and curr]
-
-        # As multiset_disconnected contains elements not previously discarded, adjust indices
-        # # Adjust indices considering previously discarded items
-        # adjusted_indices_to_remove = []
-        # for index in indices_to_remove:
-        #     count = sum(prev_self_discard[:index])  # Count how many were discarded before this index
-        #     adjusted_index = index - count - 1  # Adjust index to match current list length
-        #     if adjusted_index < len(multiset_disconnected):  # Check if index is valid for current list
-        #         adjusted_indices_to_remove.append(adjusted_index)
-
-        # # Remove the items from multiset_disconnected
-        # for index in sorted(adjusted_indices_to_remove, reverse=True):  # Sort and reverse to avoid shifting
-        #     if index < len(multiset_disconnected):  # Double check to avoid out-of-range error
-        #         del multiset_disconnected[index]
-
-
-        for tree, final_smiles, smiles_into_final, mol_order in zip(final_output_trees,
-                                                                    final_products, filtered_multiset_disconnected,
-                                                                     filtered_mols_visited_in_order):
+        for tree, final_smiles, smiles_into_final, mol_order in zip(self.output_trees,
+                                                                    final_products, multiset_disconnected,
+                                                                     mols_visited_in_order):
             final_node = (final_smiles,)
             tree.add_node(final_node)
             for reactant_in in smiles_into_final:
@@ -972,15 +669,12 @@ class _IntermediateManager(nn.Module):
             tree, mol_order = self._clean_tree_and_construction_order(tree, mol_order, final_node=final_node)
             syn_tree = synthesis_trees.SynthesisTree(tree, final_smiles, mol_order, rng)
             output_synthesis_trees.append(syn_tree)
-        # print("discard_final_num",discard_final_num)
         return output_synthesis_trees
 
     def _clean_construction_upto_final(self):
         for i in range(len(self.output_trees)):
-            if self.discard[i] == False:
-                self.output_trees[i], self.molecules_visited_in_order[i] = \
-                    self._clean_tree_and_construction_order(self.output_trees[i], self.molecules_visited_in_order[i])
-            
+            self.output_trees[i], self.molecules_visited_in_order[i] = \
+                self._clean_tree_and_construction_order(self.output_trees[i], self.molecules_visited_in_order[i])
 
     @classmethod
     def _clean_tree_and_construction_order(cls, tree, order_for_construction, final_node=None):
@@ -1034,17 +728,15 @@ class _IntermediateManager(nn.Module):
     def _get_multisets_of_molecules_coming_into_final(self):
         out = []
         idx_to_smi = self.index_to_mol_smiles
-        
         for i, tree in enumerate(self.output_trees):
-            if self.discard[i] == False:
-                # The reactants in the final reaction consist of a) those that have no successor at the moment:
-                non_follow_this_tree = [n for n in tree.nodes if len(list(tree.successors(n))) == 0]
-                smiles_coming_in = [e[0] for e in non_follow_this_tree]  # <- remove from tuple incasing.
+            # The reactants in the final reaction consist of a) those that have no successor at the moment:
+            non_follow_this_tree = [n for n in tree.nodes if len(list(tree.successors(n))) == 0]
+            smiles_coming_in = [e[0] for e in non_follow_this_tree]  # <- remove from tuple incasing.
 
-                # And b) those that are currently connected up to the product node:
-                smiles_coming_in.extend([idx_to_smi[idx] for idx in self.edges_added_into_undefined_intermediate_node[i]])
+            # And b) those that are currently connected up to the product node:
+            smiles_coming_in.extend([idx_to_smi[idx] for idx in self.edges_added_into_undefined_intermediate_node[i]])
 
-                out.append(multiset.FrozenMultiset(smiles_coming_in))
+            out.append(multiset.FrozenMultiset(smiles_coming_in))
         return out
 
     def _add_new_mols_to_dict_and_features(self, potential_new_molecules: typing.List[str]):
@@ -1066,16 +758,14 @@ class _IntermediateManager(nn.Module):
             self._add_new_feats_to_mol_feats(new_molecules_to_obtain_features_for)
 
     def _add_new_feats_to_mol_feats(self, list_of_smiles):
-      
         mol_graphs: typing.List[grphs.DirectedGraphAsAdjList] = []
         for smi in list_of_smiles:
             try:
                 mol_graphs.append(self.smi2graph(smi))
             except Exception as ex:
                 print(f"Failed to obtain features for {smi}")
-                print(f"Smiles2Graph conversion failed on SMILES: '{smi}', SMILES obtained from reaction"
-                                    f"predictor should be valid and able to be converted to a graph") 
-                continue
+                raise RuntimeError(f"Smiles2Graph conversion failed on SMILES: '{smi}', SMILES obtained from reaction"
+                                   f"predictor should be valid and able to be converted to a graph") from ex
 
         mol_graphs: grphs.DirectedGraphAsAdjList = mol_graphs[0].concatenate(mol_graphs)
         mol_graphs.inplace_torch_to(device=self._torch_device)

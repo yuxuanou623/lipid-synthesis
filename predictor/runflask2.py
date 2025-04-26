@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 
 
-def reaction(head, tail_smiles1,reaction_fg1=None):
+def reaction(head, tail_smiles1):
     all_indices = list(range(14))  # 0 to 13 inclusive
     tried_indices = set()
     smiles_list = []
@@ -41,10 +41,10 @@ def reaction(head, tail_smiles1,reaction_fg1=None):
 
         # If exactly one product found, return it
         if len(smiles_list) !=0:
-            return list(set(smiles_list)), template_index
+            return list(set(smiles_list))[0], template_index, reaction_index
 
     # If no reaction yields exactly one product, return all unique products from the last attempt
-    return list(set(smiles_list)), template_index
+    return head, template_index, reaction_index
 
 @app.route('/reaction', methods=['POST'])
 def run_reaction():
@@ -58,9 +58,9 @@ def run_reaction():
       
         head = item.get("head")
         tail_smiles1 = item.get("tail_smiles1")
-        reaction_fg1 = item.get("reaction_fg1")
+  
 
-        if not all([head, tail_smiles1, reaction_fg1]):
+        if not all([head, tail_smiles1]):
             print("i, item",i, item)
             results.append({
                 "index": i,
@@ -69,13 +69,13 @@ def run_reaction():
             continue
 
         try:
-            products, template_index = reaction(head, tail_smiles1, reaction_fg1)
+            products, template_index, reaction_index = reaction(head, tail_smiles1)
             results.append({
                 "index": i,
                 "products": products,
                 "head":head,
                 "tail": tail_smiles1,
-                "reaction_fg1":reaction_fg1,
+                "reaction_fg1":reaction_index,
                 "template_index":template_index, 
             })
         except Exception as e:

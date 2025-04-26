@@ -29,7 +29,7 @@ class Params:
         print(f"Run name is {self.run_name}\n\n")
 
         self.batch_size = 20
-        self.num_batches = 5
+        self.num_batches = 500
 
         self.log_for_reaction_predictor_path = path.join("logs", f"reactions-{self.run_name}.log")
 
@@ -43,9 +43,16 @@ def main(params: Params):
     all_syn_trees = []
     all_log_probs = []
     for _ in tqdm(range(params.num_batches)):
-        samples = model.sample(params.batch_size)
-        print(samples)
-        all_syn_trees.extend(samples[0])
+        try:
+            samples = model.sample(params.batch_size)
+        
+
+            # Make sure samples[0] is iterable and valid
+            all_syn_trees.extend(samples[0])
+
+        except Exception as e:
+            print(f"Skipping batch due to error: {e}")
+            continue  # Optional since loop will go on anyway
         # all_log_probs.append(log_probs.detach().cpu().numpy().T)
     # all_log_probs = np.concatenate(all_log_probs)
 
@@ -61,7 +68,9 @@ def main(params: Params):
 if __name__ == '__main__':
     arguments = docopt(__doc__)
     weight_path = arguments['<weight_path>']
-    weight_path = '/mnt/data/synthesis-dags/scripts/dog_gen/chkpts/epoch-26_time-25-03-26_23:03:58.pth.pick'
+    weight_path = '/mnt/data/synthesis-dags/scripts/dog_gen/out_samples/chemformerepoch10.pick'
     main(Params(weight_path))
     print("Done!")
+
+
 

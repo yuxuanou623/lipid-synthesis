@@ -53,18 +53,16 @@ def get_dog_gen(react_pred: reaction_predictors.AbstractReactionPredictor, smi2g
     if params is None:
         params = default_params
 
-    # Molecule Embedder
+    # Molecule Embedder  
     mol_embedder = molecular_graph_embedder.GraphEmbedder(**params['mol_graph_embedder_params'])
 
     # DoG Generator
-    decoder_rnn_hidden_size = params['decoder_params']['gru_hsize']
-    decoder_embdg_dim = mol_embedder.embedding_dim
+    decoder_rnn_hidden_size = params['decoder_params']['gru_hsize'] #512
+    decoder_embdg_dim = mol_embedder.embedding_dim # 160
     decoder_nets = dog_decoder.DecoderPreDefinedNetworks(
         mol_embedder,
         f_z_to_h0=nn.Linear(params['latent_dim'], decoder_rnn_hidden_size),
         f_ht_to_e_add=nn.Sequential(nn.Linear(decoder_rnn_hidden_size, 28), nn.ReLU(),
-                                    nn.Linear(28, decoder_embdg_dim)),
-        f_ht_to_e_template = nn.Sequential(nn.Linear(decoder_rnn_hidden_size, 28), nn.ReLU(),
                                     nn.Linear(28, decoder_embdg_dim)),
         f_ht_to_e_reactant=nn.Sequential(nn.Linear(decoder_rnn_hidden_size, 28), nn.ReLU(),
                                          nn.Linear(28, decoder_embdg_dim)),

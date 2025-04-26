@@ -36,10 +36,10 @@ class AbstractReactionPredictor(metaclass=abc.ABCMeta):
         self.size_of_cache = size_of_cache
 
     @abc.abstractmethod
-    def _run_list_of_reactant_sets(self, list_of_reactant_sets: typing.List[multiset.FrozenMultiset], list_template: typing.List[str]) -> typing.List[multiset.Multiset]:
+    def _run_list_of_reactant_sets(self, list_of_reactant_sets: typing.List[multiset.FrozenMultiset]) -> typing.List[multiset.Multiset]:
         raise NotImplementedError
 
-    def __call__(self, list_of_reactant_sets: typing.List[multiset.FrozenMultiset], list_template: typing.List[str]) -> typing.List[multiset.Multiset]:
+    def __call__(self, list_of_reactant_sets: typing.List[multiset.FrozenMultiset]) -> typing.List[multiset.Multiset]:
         """
         :param list_of_reactant_sets: List of sets. Each set contains SMILES strings of the reactants in the reaction
         :return: list of product sets: list of multisets with the associated product SMILES strings in the product
@@ -48,9 +48,14 @@ class AbstractReactionPredictor(metaclass=abc.ABCMeta):
 
         # Work out which ones we need to query the reaction predictor on
      
-        
+       
+        a = self._run_list_of_reactant_sets(list_of_reactant_sets)
+        print("a",a)
+        print(type(a))
         reactants_products_new = list(zip(list_of_reactant_sets,
-                                              self._run_list_of_reactant_sets(list_of_reactant_sets, list_template)))
+                                              self._run_list_of_reactant_sets(list_of_reactant_sets)))
+        # reactants_products_new = list(zip(list_of_reactant_sets,
+        #                                       self._run_list_of_reactant_sets(list_of_reactant_sets)))
      
 
         # Work out which ones we can just remove out from the cache
@@ -231,7 +236,8 @@ class TemplatePredictor(AbstractReactionPredictor):
         super().__init__(*args, **kwargs)
         self.server_address = 'http://localhost:8080/reaction'
 
-    def _run_list_of_reactant_sets(self, list_of_reactant_sets: typing.List[multiset.FrozenMultiset], list_template: typing.List[str]) -> typing.List[multiset.Multiset]:
+    def _run_list_of_reactant_sets(self, list_of_reactant_sets: typing.List[multiset.FrozenMultiset]) -> typing.List[multiset.Multiset]:
+        print("in _run_list_of_reactant_sets temp")
         n = len(list_of_reactant_sets)
        
         
@@ -246,8 +252,8 @@ class TemplatePredictor(AbstractReactionPredictor):
             
             list_of_reactants[i] = multiset.FrozenMultiset([smiles_strings[0], smiles_strings[1]])
 
-        def serialize_multisets(list_of_multisets, list_template):
-            def multiset_to_dict(multiset, template):
+        def serialize_multisets(list_of_multisets):
+            def multiset_to_dict(multiset):
                 # Convert multiset to a sorted list to ensure consistent head/tail order
                 smiles_list = sorted(list(multiset))  # optional: sort if unordered
                 if len(smiles_list) < 2:
@@ -255,14 +261,13 @@ class TemplatePredictor(AbstractReactionPredictor):
               
                 return {
                     'head': smiles_list[0],
-                    'tail_smiles1': smiles_list[1],
-                    'reaction_fg1': template.item()
+                    'tail_smiles1': smiles_list[1]
                 }
 
             # Zip the reactant multisets with corresponding templates
-            print("list_template",list_template)
-            return [multiset_to_dict(mset, tmpl) for mset, tmpl in zip(list_of_multisets, list_template)]
-        json_to_send = json.dumps(serialize_multisets(list_of_reactants,list_template))
+         
+            return [multiset_to_dict(mset) for mset in list_of_multisets]
+        json_to_send = json.dumps(serialize_multisets(list_of_reactants))
 
         def request_func():
             try:
@@ -282,24 +287,42 @@ class TemplatePredictor(AbstractReactionPredictor):
 
         # Attempt the request up to 3 times
         print("here")
-        result = misc.retry_n_times(request_func, 3, Exception, interval=0.5,
+        results = misc.retry_n_times(request_func, 3, Exception, interval=0.5,
                                     on_exception=lambda ex: self.logger.error(f"Request error: {ex}"))
-        print("result",result)
+        print("result",results)
                                  
 
-        if result is None:
+        if results is None:
+            print("resut", type(results))
+            print("result is None")
             self.logger.warning("Skipping batch due to repeated request failures.")
             return None  # You can return an appropriate default or None to indicate skipping
 
         # Process the result
         try:
             # Assuming result processing code here
-            products = result['predictions']
+            
         
             # Further processing and mapping...
-            output = [[p] for p in products]
+            
+          
+              
+            
+            print("111")
+            print("type(results", type(results))
+            for result in results:
+                print(type(result))
+                print(result['products'])
+            output = [[result['products']] for result in results]
+            print("output", output)
            
             return output
         except KeyError as ex:
+            print("keyerr", ex)
+
             self.logger.error(f"Error processing server response: {ex}")
             return None  # Handle missing keys or other issues gracefully
+        except Exception as ex:
+            print(f"Unexpected error while processing server response: {ex}")
+            self.logger.error(f"Unexpected error while processing server response: {ex}")
+            return None  # Handle all other exceptions
