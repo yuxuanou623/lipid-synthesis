@@ -34,7 +34,9 @@ def reaction(head, tail_smiles1, reaction_fg1):
             smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
             smiles_list.append(smiles)
 
-    return list(set(smiles_list))[0],template_index  # Convert to list for JSON serialization
+    if len(list(set(smiles_list))) !=0:
+        return list(set(smiles_list))[0],template_index
+    return "CCCCCCCCCCC",template_index  # Convert to list for JSON serialization
 
 @app.route('/reaction', methods=['POST'])
 def run_reaction():
@@ -52,6 +54,7 @@ def run_reaction():
 
         if not all([head, tail_smiles1, reaction_fg1]):
             print("i, item",i, item)
+
             results.append({
                 "index": i,
                 "error": "Missing one or more required fields.",

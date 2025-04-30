@@ -398,8 +398,7 @@ class SynthesisTree:
         
         print("np.array(sequence_choices)",np.array(sequence_choices))
         print("np.array(sequence_action_kinds)",np.array(sequence_action_kinds))
-        import sys
-        sys.exit()
+       
         return_ = PredOutputSingle(dag_for_input, dags_at_construction_stages, np.array(dags_id_at_index),
                                    np.array(sequence_action_kinds), np.array(sequence_choices),
                                    stacked_sequence_masks, stacked_reactant_masks, mol_to_graph_idx,

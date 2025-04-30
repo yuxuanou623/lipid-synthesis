@@ -234,6 +234,8 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
         add_step_logits = dot_product_similarity(add_steps_embeddings, self.learnt_symbols.add_step_action_embeddings)
         add_step_losses = F.cross_entropy(add_step_logits, section_actions_to_predict.data[out_add_step_locs], reduction='none')
         out_packed_losses_data[out_add_step_locs] = add_step_losses
+  
+        
 
 
         # ----> Template steps
@@ -242,6 +244,7 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
         template_step_logits = dot_product_similarity(template_steps_embeddings, self.learnt_symbols.template_step_action_embeddings)
         template_step_losses = F.cross_entropy(template_step_logits, section_actions_to_predict.data[out_template_step_locs], reduction='none')
         out_packed_losses_data[out_template_step_locs] = template_step_losses
+       
         
 
         # ----> Building block choose step
@@ -254,6 +257,7 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
                                                               reactant_masks.data[out_reactant_choose_step_locs])
         out_packed_losses_data[out_reactant_choose_step_locs] = reactant_step_losses
         
+        
 
         # ----> Edge add step values
         out_edge_add_step_locs = section_action_kinds_to_predict.data == synthesis_trees.EDGE_ADD_STEP_VAL
@@ -263,11 +267,14 @@ class DOGGenerator(base_parameterised_distribution.BaseParameterisedDistribution
                                                           section_actions_to_predict.data[out_edge_add_step_locs],
                                                           edge_masks.data[out_edge_add_step_locs])
         out_packed_losses_data[out_edge_add_step_locs] = edge_step_losses
+  
 
         # --> Pack then pad and take the sum...
         packed_losses = rnn.PackedSequence(out_packed_losses_data, section_action_kinds_to_predict.batch_sizes)
         padded_losses, _ = rnn.pad_packed_sequence(packed_losses, batch_first=True, padding_value=0.)  # [B, S_max]
         losses = torch.sum(padded_losses, dim=1)
+       
+       
         return losses
 
     def convolve_with_function(self, obs,
@@ -822,7 +829,7 @@ class _IntermediateManager(nn.Module):
             molecules_existing_indcs_tensor = torch.tensor(molecules_existing_indcs)
 
             # Apply the condition to filter indices
-            head_indices = molecules_existing_indcs_tensor[(molecules_existing_indcs_tensor >= 0) & (molecules_existing_indcs_tensor <= 38430)]
+            head_indices = molecules_existing_indcs_tensor[(molecules_existing_indcs_tensor >= 0) & (molecules_existing_indcs_tensor <= 79497)]
             
 
             
@@ -830,6 +837,7 @@ class _IntermediateManager(nn.Module):
                 base_mask[i, :] = False
                 base_mask[i, head_indices] = True
                 self.head_in_edge[batch_element]=True
+                # choose head, only true on head
             elif self.head_in_edge[batch_element] == True:                
                 base_mask[i, molecules_existing_indcs] = True
                 # Then turn back off all molecules that have already been connected to this intermediate node.
